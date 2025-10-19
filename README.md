@@ -3,6 +3,14 @@
 `LiQUiD Read` is a PCBoard PPE (written in PPL) that provides an improved message list/message reader.
 Providing a more modern message reader for Icy Board and PCBoard.
 
+## LiQUiD
+
+It's not officially back again but I just re-use that name. I was member and had
+some releases under that label which I may update (lchat/ledit). Esp. the editor
+is unfinished and a new release was promised...
+
+LChat looks good but needs some configuration options - it's very limited.
+
 ## Configuration Files
 
 ### `lread.cfg`

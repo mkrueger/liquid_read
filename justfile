@@ -15,3 +15,12 @@ run:
 # Clean build artifacts
 clean:
     rm -rf target
+
+# Build and create release zip
+release: build
+    cp FILE_ID.DIZ target/
+    cp LICENSE target/
+    cp README.md target/
+    cd target && zip -r liquid_read.zip FILE_ID.DIZ README.md LICENSE *
+    rm target/FILE_ID.DIZ target/README.md target/LICENSE
+    echo "Created target/liquid_read.zip"
