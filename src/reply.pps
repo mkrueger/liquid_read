@@ -1,0 +1,154 @@
+' Writing a reply from inside the PPE, so the caller never leaves the reader.
+' Only 4.00 has the objects this needs; older runtimes keep delegating to the
+' board's own REPLY command.
+
+DECLARE FUNCTION QuotePrefix(STRING Name) STRING
+
+PROCEDURE ReplyToMessage()
+    IF !MsgArea.CanEnter() THEN
+        Cls
+        COLOR 12
+        PRINTLN "You may not write in this area."
+        DefColor
+        Wait
+        RETURN
+    ENDIF
+
+    INTEGER ActualMsgNum = GetActualMessageNumber(Cursor)
+    IF ActualMsgNum == -1 THEN
+        RETURN
+    ENDIF
+    MSG Original = MsgArea.Read(ActualMsgNum)
+    IF !Original.Valid THEN
+        RETURN
+    ENDIF
+
+    Cls
+    StartDisp FNS
+    COLOR 14
+    PRINTLN "Reply to message ", Original.Number, " in ", MsgArea.Name
+    COLOR 7
+    PRINTLN "Enter your text. A single '/S' sends it, '/A' aborts, '/Q' quotes the original."
+    PRINTLN
+
+    STRING ToName = Original.From
+    STRING Subject = Original.Subject
+    IF !Subject.StartsWith("Re:") THEN
+        Subject = "Re: " + Subject
+    ENDIF
+
+    InputStr "To", ToName, 14, 54, MASK_ASCII(), FIELDLEN + GUIDE
+    IF ToName == "" THEN
+        ToName = Original.From
+    ENDIF
+    InputStr "Subject", Subject, 14, 54, MASK_ASCII(), FIELDLEN + GUIDE
+    IF Subject == "" THEN
+        RETURN
+    ENDIF
+
+    STRING PrivateAnswer = "N"
+    IF Original.IsPrivate THEN
+        PrivateAnswer = "Y"
+    ENDIF
+    InputStr "Private (Y/N)", PrivateAnswer, 14, 1, "YyNn", FIELDLEN + GUIDE + UPCASE
+
+    STRING Body[]
+    INTEGER Count = 0
+    ReDim Body, 200
+    STRING Prefix = QuotePrefix(Original.From)
+
+    PRINTLN
+    LOOP
+        IF Count >= 200 THEN
+            COLOR 12
+            PRINTLN "The reply is full - sending what you have."
+            DefColor
+            BREAK
+        ENDIF
+        STRING Line = ""
+        InputStr STRING(Count + 1) + ">", Line, 7, 78, MASK_ASCII(), FIELDLEN
+        PRINTLN
+        IF Line.Trim() == "/A" THEN
+            RETURN
+        ENDIF
+        IF Line.Trim() == "/S" THEN
+            BREAK
+        ENDIF
+        IF Line.Trim() == "/Q" THEN
+            ' Quote the original once, wrapped the way it was stored.
+            STRING Quoted[] = Original.Text().Replace(Chr(13), "").Split(Chr(10))
+            INTEGER Q
+            FOR Q = 0 TO Quoted.Len() - 1
+                IF Count >= 200 BREAK
+                Body[Count] = Prefix + Left(Quoted[Q], 70)
+                PRINTLN Body[Count]
+                Count = Count + 1
+            NEXT
+            CONTINUE
+        ENDIF
+        Body[Count] = Line
+        Count = Count + 1
+    ENDLOOP
+
+    IF Count == 0 THEN
+        COLOR 12
+        PRINTLN "Nothing to send."
+        DefColor
+        Wait
+        RETURN
+    ENDIF
+
+    ' MESSAGE takes the body from a file, so the reply is staged next to the PPE.
+    STRING BodyFile = PPEPath() + "reply." + STRING(PCBNode())
+    IF Exist(BodyFile) THEN
+        Delete BodyFile
+    ENDIF
+    FCreate 1, BodyFile, O_WR, S_DN
+    IF FErr(1) THEN
+        COLOR 12
+        PRINTLN "Could not stage the reply: ", Error.Last().Message
+        DefColor
+        FClose 1
+        Wait
+        RETURN
+    ENDIF
+    INTEGER W
+    FOR W = 0 TO Count - 1
+        FPutLn 1, Body[W]
+    NEXT
+    FClose 1
+
+    STRING Security = "N"
+    IF PrivateAnswer.StartsWith("Y") THEN
+        Security = "R"
+    ENDIF
+
+    Message AreaId(CONF, MsgArea.Number), ToName, Session.UserName, Subject, Security, 0, FALSE, MsgArea.EchoTag != "", BodyFile
+    Delete BodyFile
+
+    IF Error.Last().OK THEN
+        COLOR 10
+        PRINTLN "Reply saved."
+    ELSE
+        COLOR 12
+        PRINTLN "The reply could not be saved: ", Error.Last().Message
+    ENDIF
+    DefColor
+    Wait
+ENDPROC
+
+' PCBoard style initials, so a quoted line says who is being quoted.
+FUNCTION QuotePrefix(STRING Name) STRING
+    STRING Parts[] = Name.Trim().Split(" ")
+    STRING Initials = ""
+    INTEGER I
+    FOR I = 0 TO Parts.Len() - 1
+        IF Parts[I] != "" THEN
+            Initials = Initials + Left(Parts[I], 1)
+        ENDIF
+    NEXT
+    IF Initials == "" THEN
+        RETURN "> "
+    ENDIF
+    RETURN Upper(Initials) + "> "
+ENDFUNC

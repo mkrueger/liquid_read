@@ -9,7 +9,6 @@ INTEGER NumberX, NumberY
 INTEGER DateX, DateY
 INTEGER MsgX1, MsgY1, MsgX2, MsgY2
 
-
 INTEGER PrevX, PrevY
 STRING PrevLabel
 INTEGER NextX, NextY
@@ -28,71 +27,47 @@ INTEGER CsvCount
 
 INTEGER MenuIndex = 0  ; 0=Prev,1=Next,2=Reply,3=Quit
 
-
 PROCEDURE ReadMsg()
     IF !ReadConfig THEN 
         ReadConfig = TRUE
         ReadMsgConfig()
     ENDIF
 
-    STRING MsgFile = PPEPath() + "msgtxt." + STRING(PCBNode())
-    IF !Exist(MsgFile) THEN
-        LOG "Message file " + MsgFile + "  doesn't exists", true
-        STOP
+    INTEGER ActualMsgNum = GetActualMessageNumber(Cursor)
+    IF ActualMsgNum == -1 THEN
+        RETURN
     ENDIF
-    FOpen 1, MsgFile, O_RD, S_DB
-    MSGTO = "<EMPTYTO>"
-    MSGFROM = "<EMPTYFROM>"
-    MSGSUBJ = "<EMPTYSUBJ>"
-    MSGNUMBER = "<EMPTY#>"
-    MSGDATE = "<DATE>"
-    MSGTIME = "<TIME>"
+    MSG Current = MsgArea.Read(ActualMsgNum)
+    IF !Current.Valid || !MayRead(Current) THEN
+        RETURN
+    ENDIF
+
+    MSGTO = Left(StripATX(Current.To), ToLen)
+    MSGFROM = Left(StripATX(Current.From), FromLen)
+    MSGSUBJ = Left(StripATX(Current.Subject), SubjLen)
+    MSGNUMBER = STRING(Current.Number)
+    MSGDATE = STRING(Current.Date)
+    MSGTIME = STRING(Current.Time)
+
+    ' Opening a message is what marks it read for this caller.
+    MarkRead(Current.Number)
+
+    ' Wrap the stored body into the reader's column width.
+    STRING RawLine[] = Current.Text().Replace(Chr(13), "").Split(Chr(10))
+    INTEGER Width = MsgX2 - MsgX1
+    INTEGER Idx
     MSG_LEN = 0
-
-    LOOP 
-        FGet 1, line
-        IF FErr(1) RETURN
-        LOG ">" + Left(line, 17) + "<", true
-        SELECT CASE Left(line, 17)
-        CASE "            Date:"
-            MSGDATE = Mid(line, 19, 8)
-        CASE "            Time:"
-            MSGTIME = Mid(line, 19, 5)
-        CASE "              To:"
-            MSGTO   = Left(Mid(line, 19, LEN(line) - 18), ToLen)
-        CASE "            From:"
-            MSGFROM = Left(Mid(line, 19, LEN(line) - 18), FromLen)
-        CASE "         Subject:"
-            MSGSUBJ = Left(Mid(line, 19, LEN(line) - 18), SubjLen)
-        CASE "  Message Number:"
-            MSGNUMBER = Left(Mid(line, 19, LEN(line) - 18), 5)
-        CASE "Extended headers:"
-            I = 0
-            J = TOINT(Mid(line, 19, LEN(line) - 18))
-            WHILE I < J DO
-                FGet 1, line
-                IF LEFT(line, 8) == "SUBJECT:" THEN
-                    MSGSUBJ = Left(Mid(line, 9, LEN(line) - 9), SubjLen)
-                ENDIF
-                I += 1
-            ENDWHILE
-        ENDSELECT
-
-        IF line == "Message Body:" BREAK
-    ENDLOOP
-
-    MSG_LEN = 0
-    While MSG_LEN < 200 DO
-        FGet 1, MSGTXT[MSG_LEN]
-        WHILE LEN(MSGTXT[MSG_LEN]) > MsgX2 - MsgX1 DO 
-            MSGTXT[MSG_LEN + 1] = Right(MSGTXT[MSG_LEN], LEN(MSGTXT[MSG_LEN]) - (MsgX2 - MsgX1))
-            MSGTXT[MSG_LEN] = Left(MSGTXT[MSG_LEN], MsgX2 - MsgX1)
+    FOR Idx = 0 TO RawLine.Len() - 1
+        STRING Rest = RawLine[Idx]
+        LOOP
+            IF MSG_LEN >= 200 BREAK
+            MSGTXT[MSG_LEN] = Left(Rest, Width)
             MSG_LEN += 1
-        ENDWHILE
-        IF FErr(1) BREAK
-        MSG_LEN += 1
-    ENDWHILE
-    FClose 1
+            IF LEN(Rest) <= Width BREAK
+            Rest = Right(Rest, LEN(Rest) - Width)
+        ENDLOOP
+        IF MSG_LEN >= 200 BREAK
+    NEXT
     :RedrawReader
     Cls
     StartDisp FNS
@@ -180,7 +155,7 @@ PROCEDURE ReadMsg()
             goto RedrawReader         
         CASE "R", "r"
             Cls
-            Command false, "REPLY " + MSGNUMBER
+            ReplyToMessage()
             Goto RedrawReader
         CASE "LEFT"
             IF MenuIndex > 0 THEN
@@ -200,18 +175,16 @@ PROCEDURE ReadMsg()
             SELECT CASE MenuIndex
             CASE 0            ; Prev    
                 Up()
-                WriteMsgFile()
                 ReadMsg()
                 RETURN
             CASE 1            ; Next
                 Down()
-                WriteMsgFile()
                 ReadMsg()
                 RETURN
             CASE 2            ; Reply
                 Cls
-                Command FALSE, "REPLY " + STRING(MSGNUMBER)
-                BREAK
+                ReplyToMessage()
+                GOTO RedrawReader
             CASE 3            ; Quit
                 RETURN
             ENDSELECT            

@@ -1,106 +1,61 @@
 
 INTEGER CurMsgTxt
 
-FUNCTION WriteMsgFile() STRING
-    STRING MsgFile = PPEPath() + "msgtxt." + STRING(PCBNode())
+' The body of the message the preview is showing, split into lines once.
+STRING PreviewLine[]
+INTEGER PreviewCount
 
-    INTEGER ActualMsgNum = GetActualMessageNumber(Cursor)
-    IF ActualMsgNum == -1 THEN
-        IF Exist(MsgFile) THEN
-            Delete MsgFile
-        ENDIF
-        CurMsgTxt = -1
-        ClrHdrArea()
-        AnsiPos MsgHdrX1, MsgHdrY1
-        COLOR 11
-        PRINT "No valid message"
+PROCEDURE LoadPreview(LONG MsgNum)
+    MSG Body = MsgArea.Read(MsgNum)
+    PreviewCount = 0
+    IF !Body.Valid THEN
         RETURN
     ENDIF
-
-    IF CurMsgTxt != ActualMsgNum THEN
-        CurMsgTxt = ActualMsgNum
-        Delete MsgFile
-        MsgToFile CONF, ActualMsgNum, MsgFile
-    ENDIF
-    RETURN MsgFile
-ENDFUNC
+    PreviewLine = Body.Text().Replace(Chr(13), "").Split(Chr(10))
+    PreviewCount = PreviewLine.Len()
+ENDPROC
 
 PROCEDURE DrawMsgText()
-    STRING line
-    STRING MsgFile = WriteMsgFile()
-
     INTEGER ActualMsgNum = GetActualMessageNumber(Cursor)
     IF ActualMsgNum == -1 THEN
-        IF Exist(MsgFile) THEN
-            Delete MsgFile
-        ENDIF
         CurMsgTxt = -1
+        PreviewCount = 0
         ClrHdrArea()
         AnsiPos MsgHdrX1, MsgHdrY1
         COLOR 11
         PRINT "No valid message"
+        DefColor
         RETURN
     ENDIF
 
     IF CurMsgTxt != ActualMsgNum THEN
         CurMsgTxt = ActualMsgNum
-        Delete MsgFile
-        MsgToFile CONF, ActualMsgNum, MsgFile
+        LoadPreview(ActualMsgNum)
     ENDIF
- 
-    IF !Exist(MsgFile) THEN
-        LOG "Message file " + MsgFile + "  doesn't exists", true
-        ClrHdrArea()
-        AnsiPos MsgHdrX1, MsgHdrY1
-        COLOR 11
-        PRINT "Message file " + MsgFile + "  doesn't exists"
-        RETURN 
-    ENDIF
-:Restart
-    FOpen 1, MsgFile, O_RD, S_DB
-    IF FErr(1) THEN
-        ClrHdrArea()
-        AnsiPos MsgHdrX1, MsgHdrY1
-        COLOR 11
-        PRINT "Message file " + MsgFile + " can't be opened"
-        RETURN
-    ENDIF
-  
-    LOOP 
-        FGet 1, line
-        IF FErr(1) RETURN
-        IF line == "Message Body:" BREAK
-    ENDLOOP
 
-    WHILE I < FirstTxtLine DO
-        I += 1
-        FGet 1, line
-        IF FErr(1) THEN 
-            FirstTxtLine = I - (MsgHdrY2 - MsgHdrY1)
-            IF FirstTxtLine < 0 THEN
-                FirstTxtLine = 0
-            ENDIF
-            FClose 1
-            GOTO Restart
+    ' Never scroll past the last line, so paging down on a short message stops.
+    IF FirstTxtLine >= PreviewCount THEN
+        FirstTxtLine = PreviewCount - (MsgHdrY2 - MsgHdrY1)
+        IF FirstTxtLine < 0 THEN
+            FirstTxtLine = 0
         ENDIF
-    ENDWHILE
+    ENDIF
 
     INTEGER msg_line = 0
     Color 7
     WHILE MsgHdrY1 + msg_line <= MsgHdrY2 DO
-        FGet 1, line
-        IF FErr(1) || msg_line + MsgHdrY1 > 23 BREAK
+        IF msg_line + MsgHdrY1 > 23 BREAK
         AnsiPos MsgHdrX1, MsgHdrY1 + msg_line
-        PRINT Left(line, MsgHdrX2 - MsgHdrX1)
+        INTEGER Source = FirstTxtLine + msg_line
+        IF Source < PreviewCount THEN
+            PRINT Left(PreviewLine[Source], MsgHdrX2 - MsgHdrX1)
+            ClrEOL
+        ELSE
+            PRINT Space(MsgHdrX2 - MsgHdrX1)
+        ENDIF
         msg_line += 1
     ENDWHILE
-    FClose 1
-    
-    WHILE MsgHdrY1 + msg_line <= MsgHdrY2 DO
-        AnsiPos MsgHdrX1, MsgHdrY1 + msg_line
-        Print Space(MsgHdrX2 - MsgHdrX1)
-        msg_line += 1
-    ENDWHILE
+    DefColor
 ENDPROC
 
 PROCEDURE ClrHdrArea()

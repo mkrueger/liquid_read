@@ -8,15 +8,25 @@ DECLARE PROCEDURE ReadMsgConfig()
 
 DECLARE PROCEDURE BuildMessageIndex()
 DECLARE FUNCTION GetActualMessageNumber(INTEGER DisplayIndex) INTEGER
-DECLARE FUNCTION WriteMsgFile() STRING
 DECLARE FUNCTION PageUp() BOOLEAN
 DECLARE FUNCTION PageDown() BOOLEAN
+DECLARE FUNCTION MayRead(MSG Header) BOOLEAN
+DECLARE PROCEDURE LoadPreview(LONG MsgNum)
+DECLARE PROCEDURE ReplyToMessage()
+DECLARE PROCEDURE MarkRead(LONG MsgNum)
+DECLARE FUNCTION HighestRead() LONG
 
-INTEGER CONF = CurConf()
-INTEGER LOW = LOMSGNUM()
-INTEGER HIGH = HiMsgNum()
+' From 4.00 on the caller's area is an object: numbers, headers and bodies all
+' come from it, so nothing here needs to know how a message base is stored.
+AREA MsgArea = Session.Area
+INTEGER CONF = Session.Conference.Number
+LONG LOW = MsgArea.LowMsg()
+LONG HIGH = MsgArea.HighMsg()
 STRING FROM(10), SUBJ(10), TO(10), DATETXT(10), ValidMessageIndex(10)
 INTEGER ValidMessageCount = 0
+' The board keeps one last-read pointer per caller and area. Moving it only
+' forward means paging back through old mail does not hide the new one.
+LONG SessionHighRead = -1
 BOOLEAN MessageIndexBuilt
 
 INTEGER FirstMsg = 0
@@ -30,7 +40,6 @@ STRING LINE
 INTEGER LastFirstMsg = -1
 INTEGER OldCursor = -1
 BOOLEAN Redraw
-
 
 FOpen 1, PPEPath() + "lread.cfg", O_RD, S_DB
 
@@ -136,52 +145,51 @@ ENDLOOP
 PROCEDURE BuildMessageIndex()
     ValidMessageCount = 0
     MessageIndexBuilt = FALSE
-;$IF RUNTIME < 400
-    STRING MSGS_FILE = ConfInfo(CONF, 12)
-    BOOLEAN MSGIDXVALID = FALSE
-    IF Exist(MSGS_FILE + ".IDX") THEN
-        FOPEN 4, MSGS_FILE + ".IDX", O_RD, S_DW
-        MSGIDXVALID = TRUE
-    ENDIF
-;$ENDIF
     INTEGER MSG_NUM
     FOR MSG_NUM = LOW TO HIGH
         BOOLEAN IsValid = FALSE
-        
-;$IF RUNTIME >= 400
-        INTEGER ActiveFlag = GetMsgHdr(CONF, MSG_NUM, HDR_ACTIVE)
-        IF ActiveFlag == 225 THEN
-            STRING TestTo = GetMsgHdr(CONF, MSG_NUM, HDR_TO)
-            IF (TestTo = "ALL" | TestTo = U_NAME()) THEN
-                IsValid = TRUE
-            ENDIF
-        ENDIF
-;$ELSE
-        IF MSGIDXVALID THEN
-            IF !FErr(4) THEN
-                INTEGER IndexPos = (MSG_NUM - LOW) * 64
-                FSEEK 4, IndexPos, SEEK_SET
-                INTEGER TestOffset
-                FREAD 4, TestOffset, 4
-                IF (TestOffset > 0) THEN
-                    IsValid = TRUE
-                ENDIF
-            ENDIF
-        ENDIF
-;$ENDIF
+
+        ' A gap in the numbering answers Valid = FALSE, so a miss is not an error.
+        MSG Header = MsgArea.Read(MSG_NUM)
+        IsValid = Header.Valid && MayRead(Header)
 
         IF IsValid THEN
             ValidMessageIndex(ValidMessageCount) = MSG_NUM
             ValidMessageCount = ValidMessageCount + 1
         ENDIF
     NEXT
-;$IF RUNTIME < 400
-    IF MSGIDXVALID THEN 
-        FCLOSE 4
-    ENDIF
-;$ENDIF
     MessageIndexBuilt = TRUE
 ENDPROC
+
+' The runtime hands out every stored message, so deciding what this caller may
+' see is the program's job. Deleted mail stays hidden, protected mail needs the
+' sysop, and private mail belongs to its sender or its receiver only.
+PROCEDURE MarkRead(LONG MsgNum)
+    IF MsgNum > SessionHighRead THEN
+        SessionHighRead = MsgNum
+        SetLMR AreaId(CONF, MsgArea.Number), MsgNum
+    ENDIF
+ENDPROC
+
+' What was read before this run started, so the list can mark what is new.
+FUNCTION HighestRead() LONG
+    RETURN SessionHighRead
+ENDFUNC
+
+FUNCTION MayRead(MSG Header) BOOLEAN
+    IF Header.IsDeleted THEN
+        RETURN FALSE
+    ENDIF
+    IF Header.NeedsPassword && !Session.IsSysop THEN
+        RETURN FALSE
+    ENDIF
+    IF !Header.IsPrivate || Session.IsSysop THEN
+        RETURN TRUE
+    ENDIF
+    BOOLEAN Mine = (Header.To = Session.UserName) || (Header.From = Session.UserName)
+    Mine = Mine || (Header.To = Session.AliasName) || (Header.From = Session.AliasName)
+    RETURN Mine
+ENDFUNC
 
 FUNCTION GetActualMessageNumber(INTEGER DisplayIndex) INTEGER
     IF !MessageIndexBuilt THEN
@@ -194,7 +202,6 @@ FUNCTION GetActualMessageNumber(INTEGER DisplayIndex) INTEGER
     
     RETURN -1
 ENDFUNC
-
 
 FUNCTION Up() BOOLEAN
     IF Cursor > 0 THEN
@@ -221,7 +228,6 @@ FUNCTION Down() BOOLEAN
     ENDIF
     RETURN FALSE
 ENDFUNC
-
 
 FUNCTION PageUp() BOOLEAN
     IF ValidMessageCount <= 0 RETURN FALSE
@@ -250,3 +256,4 @@ FUNCTION PageDown() BOOLEAN
     FirstTxtLine = 0
     RETURN TRUE
 ENDFUNC
+
